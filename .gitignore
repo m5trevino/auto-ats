@@ -1,0 +1,67 @@
+# Personal / runtime data that should never be committed
+.env
+.env.local
+provider_config.json
+master.txt
+master_resume.txt
+master-jr.txt
+*.html
+jobs.db
+job_history.json
+categorized_tags.json
+blacklist.json
+user_prompts.json
+
+# Generated artifacts
+targets/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+logs/
+logs.zip
+
+# Session / recovery artifacts
+260607-2054/
+260607-2073/
+260607-2178/
+260607-2209/
+260607-2241/
+260608-2112/
+260611-1609/
+260618-2107/
+260*/
+recovered-logs/
+recovery-logs/
+sessions/
+docs/
+scrape_*.json
+scrape*.json
+
+# Old / deployment-specific scripts
+warroom.sh
+warroom-README.md
+setup-remote-ai.sh
+git_cleanup.sh
+git_push.sh
+check_port_5000.sh
+
+# Old warroom UI
+static/js/main.js
+static/css/style.css
+templates/index.html
+
+# Other personal / generated files
+master-resume.txt
+Full_Pipeline_Code_Generation_and_Verification(3).md
+Matthew_Trevino_Workflow_Automation_Specialist.html
+logs.zip
+*.db
+
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/

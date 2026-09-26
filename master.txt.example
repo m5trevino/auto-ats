@@ -1,0 +1,44 @@
+# REPLACE THIS FILE WITH YOUR OWN MASTER RESUME
+
+This is a placeholder master resume. The auto-ATS app uses `master.txt` as the
+source-of-truth for baseline ATS scoring and resume tailoring.
+
+## How to add your resume
+
+1. Paste your full resume text into this file and save it as `master.txt`, OR
+2. Use the app: click the gear icon on any job → choose RESUME → Upload/Paste.
+
+## What should go here
+
+Everything: summary, skills, experience, projects, education, certifications.
+The more detail you include, the better the ATS scorer and the AI tailoring.
+
+---
+
+Example format (delete this and replace with your real resume):
+
+YOUR NAME
+Location: Your City, ST
+Contact: email@example.com • linkedin.com/in/yourprofile
+
+PROFESSIONAL SUMMARY
+A results-driven [role] with X years of experience in [skills]. Proven track record of...
+
+CORE SKILLS
+- Python, Django, FastAPI, PostgreSQL, AWS, Docker, Kubernetes, Git, CI/CD
+- React, TypeScript, JavaScript, HTML, CSS
+- Leadership, project management, cross-functional collaboration
+
+EXPERIENCE
+Company Name — Role | Start – End
+- Accomplishment with metric
+- Another accomplishment
+
+PROJECTS
+Project Name — description and technologies used.
+
+EDUCATION
+Degree — School — Year
+
+CERTIFICATIONS
+- Certification Name — Year

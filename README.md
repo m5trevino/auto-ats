@@ -1,55 +1,148 @@
-# auto-ATS
+# Auto-ATS
 
-Indeed job saver scripts for the Auto-ATS (Automated Application Tracking System).
+Open-source, self-hosted resume tailoring system. Clone it, drop in your master resume, add job postings from any source, and generate targeted resumes + PDFs with ATS scoring.
 
-## Overview
+## What it does
 
-This repository contains Tampermonkey userscripts for saving job postings from Indeed to the auto-ATS system.
+- Scores your master resume against a job description before generation.
+- Runs a 6-strike LLM pipeline to tailor your resume to the job.
+- Scores the generated resume and shows improvement.
+- Generates a PDF automatically.
+- Supports manual entry, bulk JSON import, file upload, and browser userscripts (e.g. Indeed).
 
-## Files
+## Quick start
 
-### `src/userscripts/indeed-saver.js`
-- Main script for saving Indeed job postings
-- Works with Indeed's modern two-pane layout
-- Sends job data to `http://localhost:5000/api/tm-save`
+```bash
+git clone <repo-url> auto-ats
+cd auto-ats
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
-### `src/userscripts/indeed-job-saver.js`
-- Alternative Indeed job saver script
-- Similar functionality with slightly different implementation
+cp .env.example .env
+# Edit .env with your LLM provider URL and API key, OR set it in the web UI.
 
-## Installation
+cp /path/to/your/resume.txt master.txt
+# OR upload/paste your resume in the web UI after starting the app.
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) browser extension
-2. Copy the contents of either `indeed-saver.js` or `indeed-job-saver.js` 
-3. Create a new userscript in Tampermonkey and paste the code
-4. Save and enable the script
-5. Visit any Indeed job posting page
-6. Click the "Save to ATS" button that appears in the top-right corner
+python3 server.py
+```
 
-## Configuration
+Open `http://localhost:5000`. The UI looks like a job-search site.
 
-The scripts are configured to send data to `http://localhost:5000/api/tm-save`. 
-Make sure your auto-ATS backend is running and accessible at this endpoint.
+## LLM Provider Setup
 
-## Documentation
+Auto-ATS uses any OpenAI-compatible chat-completions endpoint.
 
-See `docs/App_Indeed_URL_Integration_via_Apify.md` for detailed information about Indeed URL integration via Apify.
+### Option 1: Environment file
 
-## Related Projects
+```bash
+cp .env.example .env
+# edit .env
+FREELLM_URL=https://api.openai.com/v1
+FREELLM_API_KEY=sk-...
+FREELLM_MODEL=gpt-4o
+```
 
-- `trevino_war_room-master/` - Contains the main auto-ATS backend system (Flask server)
-- The scripts are designed to work with the Trevino War Room v6.0 system
+### Option 2: Web UI
 
-## Usage
+1. Click any job.
+2. Click the **gear** icon.
+3. Under **LLM PROVIDER**, enter:
+   - **URL**: your provider's `/v1` endpoint
+   - **API Key**: your key
+   - **Default Model**: e.g. `gpt-4o`, `llama-3.3-70b-versatile`, `auto`
+4. Click **Save Provider**.
 
-When viewing an Indeed job posting:
-1. Click the "Save to ATS" button that appears
-2. The script will wait for the job description to load
-3. Capture the job HTML and send it to your local auto-ATS instance
-4. Receive success/error notifications via toast messages
+### Supported providers
 
-## Requirements
+Any provider with an OpenAI-compatible `/chat/completions` endpoint:
 
-- Browser with Tampermonkey extension
-- Running auto-ATS backend (typically on localhost:5000)
-- Indeed job posting page open
+- OpenAI
+- Groq
+- Together
+- LocalAI / LM Studio / llama.cpp server
+- Any custom FreeLLM-style proxy
+
+The per-job **MODEL** dropdown still lets you override the model for each generation.
+
+## Add your master resume
+
+The app uses your master resume for two things:
+
+1. Baseline ATS scoring against each job.
+2. Source material for the AI tailoring pipeline.
+
+### Option 1: Replace `master.txt`
+
+```bash
+cp your_resume.txt master.txt
+```
+
+### Option 2: Upload in the app
+
+1. Click any job.
+2. Click the **gear** icon.
+3. Under **UPLOAD / PASTE RESUME**, choose a `.txt` file or paste text.
+4. Click **Save Resume**.
+5. Select it from the **RESUME** dropdown.
+
+You can store multiple resumes in `resumes/` and switch between them per job.
+
+## Add jobs
+
+| Method | How |
+|--------|-----|
+| **Manual form** | Click **+ Add Job** in the top nav |
+| **JSON paste** | Same modal → JSON Array tab |
+| **JSON file** | Same modal → JSON File tab |
+| **Indeed userscript** | Install `src/userscripts/indeed-saver.js` in Tampermonkey/Violentmonkey, click **Save to ATS** on an Indeed job page |
+| **Scraper files** | Drop Apify/Indeed/LinkedIn `.json` files in the project root and click **+ Import Scrapes** |
+
+## Workflow
+
+1. Jobs arrive in **Job Feed** (status `NEW`).
+2. Click a job and **Approve** the ones you want to pursue.
+3. Switch to **Generation**, select the job, choose your resume + model, and click **Create Tailored**.
+4. If the ATS gate blocks a low-match job, click **Force** to generate anyway.
+5. Generated resumes move to **The Vault**. Click **VIEW PDF** or open the `targets/<job>/` folder.
+
+## Environment variables
+
+Copy `.env.example` to `.env` and set:
+
+```env
+FREELLM_URL=http://localhost:3001/v1
+FREELLM_API_KEY=optional
+ATS_GATE_THRESHOLD=35.0
+ATS_GATE_MIN_SIGNAL=5.0
+```
+
+## Project layout
+
+```
+auto-ats/
+├── server.py                 # Flask API
+├── pipeline-scripts/         # Scorer, strike orchestrator, import engine
+│   ├── ats_scorer.py
+│   ├── strike_handler.py
+│   └── job_import.py
+├── static/camouflage/        # Indeed-clone web UI
+│   ├── index.html
+│   ├── ghost.js
+│   └── style.css
+├── payloads/prompts/         # 6-strike prompts
+├── targets/                  # Generated resumes + PDFs (gitignored)
+├── jobs.db                   # SQLite metadata (gitignored)
+├── master.txt                # Your master resume (gitignored, template provided)
+└── resumes/                  # Optional additional resumes (gitignored)
+```
+
+## Notes
+
+- `master.txt`, `jobs.db`, `targets/`, `.env`, and other runtime data are excluded from git so the repo is safe to share.
+- The default `master.txt` is a template. Do not commit your real resume.
+
+## License
+
+MIT

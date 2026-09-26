@@ -1,0 +1,116 @@
+% !TEX TS-program = lualatex
+% !TEX encoding = UTF-8 Unicode
+
+\DocumentMetadata{
+  tagging = on,
+  lang = en-US,
+  pdfstandard = ua-2,
+  tagging-setup = {
+    math/setup={mathml-AF,mathml-SE},
+    extra-modules={verbatim-mo},
+    table/header-rows=1
+  }
+}
+
+\documentclass[11pt, letterpaper]{article}
+
+% --- PACKAGES ---
+\usepackage[margin=0.75in]{geometry}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+
+% --- FONTS ---
+\setmainfont{TeX Gyre Heros}
+\setmathfont{Latin Modern Math}
+
+% --- METADATA ---
+\hypersetup{
+    pdftitle={Tailored Resume - (( name ))},
+    pdfauthor={(( name ))},
+    pdfsubject={ATS Optimized Professional Resume},
+    pdfkeywords={Systems Architect, Logistics, Automation, AI},
+    pdfdisplaydoctitle=true,
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+% --- STYLE SETTINGS ---
+\titleformat{\section}{\large\bfseries\uppercase}{}{0em}{}[\titlerule]
+\titlespacing*{\section}{0pt}{12pt}{8pt}
+\setlist[itemize]{noitemsep, topsep=0pt, leftmargin=1.5em}
+
+\newcommand{\jobheader}[4]{
+  \noindent
+  \textbf{#1} \hfill #2 \\
+  \textit{#3} \hfill \textit{#4} \vspace{2pt}
+}
+
+\begin{document}
+
+% --- HEADER ---
+\begin{center}
+    {\huge \bfseries (( name.upper() ))} \\
+    \vspace{4pt}
+    (( contact_info )) \\
+    \href{mailto:(( email ))}{(( email ))} | (( phone )) \\
+    \href{https://(( linkedin ))}{(( linkedin ))} | \href{https://(( github ))}{(( github ))}
+\end{center}
+
+% --- SUMMARY ---
+\section{Professional Summary}
+(( summary ))
+
+% --- COMPETENCIES ---
+\section{Core Competencies}
+\begin{itemize}
+    [* for skill in skills *]
+    \item (( skill ))
+    [* endfor *]
+\end{itemize}
+
+% --- EXPERIENCE ---
+\section{Professional Experience}
+[* for job in experience *]
+\jobheader{ (( job.company )) }{ (( job.dates )) }{ (( job.role )) }{ (( job.location )) }
+\begin{itemize}
+    [* for bullet in job.bullets *]
+    \item (( bullet ))
+    [* endfor *]
+\end{itemize}
+\vspace{8pt}
+[* endfor *]
+
+% --- PROJECTS ---
+\section{Technical Projects}
+[* for project in projects *]
+\noindent \textbf{ (( project.name )) } | \textit{ (( project.role )) } \\
+(( project.description ))
+\begin{itemize}
+    [* for bullet in project.bullets *]
+    \item (( bullet ))
+    [* endfor *]
+\end{itemize}
+\vspace{6pt}
+[* endfor *]
+
+% --- EDUCATION ---
+\section{Education}
+[* for edu in education *]
+\noindent \textbf{ (( edu.degree )) } \hfill (( edu.date )) \\
+(( edu.institution )) \hfill (( edu.location )) \\
+[* endfor *]
+
+% --- CERTIFICATIONS ---
+\section{Certifications}
+\begin{itemize}
+    [* for cert in certifications *]
+    \item (( cert ))
+    [* endfor *]
+\end{itemize}
+
+\end{document}
