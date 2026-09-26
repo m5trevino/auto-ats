@@ -54,11 +54,10 @@
 
 % --- HEADER ---
 \begin{center}
-    {\huge \bfseries (( name.upper() ))} \\
-    \vspace{4pt}
-    (( contact_info )) \\
-    \href{mailto:(( email ))}{(( email ))} | (( phone )) \\
-    \href{https://(( linkedin ))}{(( linkedin ))} | \href{https://(( github ))}{(( github ))}
+    {\huge \bfseries (( name.upper() ))}
+    [* if contact_info *]\\(( contact_info ))[* endif *]
+    [* if email or phone *]\\[* if email *]\href{mailto:(( email ))}{(( email ))}[* endif *][* if email and phone *] | [* endif *][* if phone *](( phone ))[* endif *][* endif *]
+    [* if linkedin or github *]\\[* if linkedin *]\href{https://(( linkedin ))}{(( linkedin ))}[* endif *][* if linkedin and github *] | [* endif *][* if github *]\href{https://(( github ))}{(( github ))}[* endif *][* endif *]
 \end{center}
 
 % --- SUMMARY ---

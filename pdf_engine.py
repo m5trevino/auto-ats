@@ -96,7 +96,9 @@ def generate_pdf(job_id):
         # Run inside the target directory so log/aux files stay there
         result = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True)
 
-        if result.returncode == 0:
+        if result.returncode == 0 or os.path.exists(pdf_path):
+            if result.returncode != 0:
+                print(f"\033[93m[!] LuaLaTeX exited with code {result.returncode}, but PDF was produced.\033[0m")
             print(f"[+] PDF GENERATED: {pdf_path}")
             return {"status": "success", "path": f"/done/{dir_name}/resume.pdf"}
         else:

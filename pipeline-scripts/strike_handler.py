@@ -88,6 +88,138 @@ def extract_json(text: str) -> Optional[Dict]:
     return None
 
 
+# ── Markdown-to-JSON fallback converter ─────────────────────────────────────
+def _extract_markdown_section(text: str, header: str) -> str:
+    """Return the text under a markdown ## section."""
+    pattern = re.compile(rf"##\s*{re.escape(header)}.*?(?=\n##\s|\Z)", re.S | re.I)
+    m = pattern.search(text)
+    if not m:
+        return ""
+    return m.group(0).split("\n", 1)[1] if "\n" in m.group(0) else ""
+
+
+def _parse_markdown_resume(markdown_text: str) -> Dict:
+    """
+    Convert a markdown resume into the JSON schema expected by pdf_engine.
+    Used as fallback when the LLM ignores JSON instructions.
+    """
+    data: Dict = {
+        "name": "",
+        "email": "",
+        "phone": "",
+        "linkedin": "",
+        "github": "",
+        "contact_info": "",
+        "summary": "",
+        "skills": [],
+        "experience": [],
+        "projects": [],
+        "education": [],
+        "certifications": [],
+    }
+
+    lines = markdown_text.splitlines()
+
+    # Header line usually has name, contact
+    if lines:
+        first = lines[0].strip().lstrip("# ")
+        data["name"] = first.strip()
+
+    # Contact line
+    for line in lines[:10]:
+        if "@" in line or re.search(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", line):
+            data["contact_info"] = line.strip().lstrip("| ").strip()
+            emails = re.findall(r"[\w.-]+@[\w.-]+\.\w+", line)
+            if emails:
+                data["email"] = emails[0]
+            phones = re.findall(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", line)
+            if phones:
+                data["phone"] = phones[0]
+            linkedins = re.findall(r"linkedin\.com/[^\s|)\"]+", line)
+            if linkedins:
+                data["linkedin"] = linkedins[0]
+            githubs = re.findall(r"github\.com/[^\s|)\"]+", line)
+            if githubs:
+                data["github"] = githubs[0]
+            break
+
+    # Summary
+    summary_text = _extract_markdown_section(markdown_text, "Professional Summary")
+    if not summary_text:
+        summary_text = _extract_markdown_section(markdown_text, "Summary")
+    if summary_text:
+        data["summary"] = " ".join(line.strip() for line in summary_text.splitlines() if line.strip()).strip()
+
+    # Skills - collect bullet/list lines and bold categories
+    skills_text = _extract_markdown_section(markdown_text, "Core Competencies")
+    if not skills_text:
+        skills_text = _extract_markdown_section(markdown_text, "Skills")
+    if skills_text:
+        skill_lines = [line.strip().lstrip("- * ").strip() for line in skills_text.splitlines() if line.strip()]
+        flat = []
+        for line in skill_lines:
+            if ":" in line:
+                flat.extend(part.strip() for part in line.split(":", 1)[1].split(",") if part.strip())
+            else:
+                flat.extend(part.strip() for part in line.split(",") if part.strip())
+        data["skills"] = [s for s in flat if s]
+
+    # Experience
+    exp_text = _extract_markdown_section(markdown_text, "Professional Experience")
+    if exp_text:
+        entries = re.split(r"\n###\s+", exp_text)
+        for entry in entries:
+            if not entry.strip():
+                continue
+            lines = entry.splitlines()
+            header = lines[0].strip().lstrip("### ") if lines else ""
+            role_company = re.split(r"\s*\|\s*", header)
+            role = role_company[0].strip() if role_company else ""
+            company = role_company[1].strip() if len(role_company) > 1 else ""
+            dates = role_company[2].strip() if len(role_company) > 2 else ""
+            bullets = []
+            for line in lines[1:]:
+                line = line.strip()
+                if line.startswith("-") or line.startswith("*"):
+                    bullets.append(line.lstrip("- *").strip())
+            if role or company:
+                data["experience"].append({
+                    "role": role,
+                    "company": company,
+                    "dates": dates,
+                    "location": "",
+                    "bullets": bullets,
+                })
+
+    # Education
+    edu_text = _extract_markdown_section(markdown_text, "Education")
+    if edu_text:
+        for line in edu_text.splitlines():
+            line = line.strip().lstrip("- *")
+            if not line:
+                continue
+            parts = re.split(r"\s*\|\s*", line)
+            degree = parts[0].strip() if parts else ""
+            institution = parts[1].strip() if len(parts) > 1 else ""
+            date = parts[2].strip() if len(parts) > 2 else ""
+            data["education"].append({
+                "degree": degree,
+                "institution": institution,
+                "location": "",
+                "date": date,
+            })
+
+    # Certifications
+    cert_text = _extract_markdown_section(markdown_text, "Certifications")
+    if cert_text:
+        for line in cert_text.splitlines():
+            line = line.strip().lstrip("- *")
+            if line:
+                data["certifications"].append(line)
+
+    return data
+
+
 # ── Resume Helpers ─────────────────────────────────────────────────────────
 def flatten_resume_to_text(resume_data: Dict) -> str:
     """Flatten resume.json structure to searchable text for ATS scoring."""
@@ -521,23 +653,15 @@ def execute_strike(
         threshold = float(os.getenv("ATS_GATE_THRESHOLD", "35.0"))
         min_signal = float(os.getenv("ATS_GATE_MIN_SIGNAL", "5.0"))
         gate_passed = baseline_score >= threshold and max_points >= min_signal
-        print(f"\033[96m[*] ATS GATE: Score {baseline_score}/100 (threshold: {threshold}, signal: {max_points}) - {'PASSED' if gate_passed else 'FAILED'}\033[0m")
-        if not gate_passed and not force:
-            reason = (
-                f"Baseline ATS signal too weak (max_points={max_points}); job lacks measurable requirements"
-                if max_points < min_signal
-                else f"Baseline ATS score {baseline_score} below threshold {threshold}"
-            )
-            return {
-                "status": "rejected",
-                "reason": reason,
-                "baseline_score": baseline_score,
-            }
-        if not gate_passed and force:
-            print(f"\033[93m[!] ATS GATE BYPASSED (force=True). Continuing strike despite weak signal.\033[0m")
+        print(f"\033[96m[*] ATS GATE: Score {baseline_score}/100 (threshold: {threshold}, signal: {max_points}) - {'PASSED' if gate_passed else 'LOW'}\033[0m")
+        # The gate is advisory only. We always continue so dispatcher/logistics/soft-skill
+        # jobs don't get blocked just because the lexicon is tech-heavy.
+        if not gate_passed:
+            print(f"\033[93m[!] ATS GATE ADVISORY: continuing strike despite low signal.\033[0m")
 
     # ── Strike 1: NEON TERMINATOR keyword extraction ─────────────────────
     prompt1 = prompt_override or load_prompt("prompt1-hard-soft-domain-gatekeeper.md")
+    prompt1 = prompt1.replace("{{RESUME_TEXT}}", master_resume_text).replace("{{JOB_DESCRIPTION}}", job_desc)
     prompt1 = prompt1.replace("{resume_text}", master_resume_text).replace("{job_desc}", job_desc)
 
     neon_output = call_llm(prompt1, model=model, temp=temp)
@@ -566,14 +690,25 @@ def execute_strike(
             continue
 
         prompt = inject_keyword_block(prompt_template, keyword_block)
-        prompt = prompt.replace("{resume_text}", master_resume_text)
-        prompt = prompt.replace("{job_desc}", job_desc)
+        prompt = prompt.replace("{{RESUME_TEXT}}", master_resume_text).replace("{{JOB_DESCRIPTION}}", job_desc)
+        prompt = prompt.replace("{resume_text}", master_resume_text).replace("{job_desc}", job_desc)
         if last_output:
             prompt = prompt.replace("{{RESUME_MD}}", last_output)
             prompt = prompt.replace("{previous_resume}", last_output)
 
         last_output = call_llm(prompt, model=model, temp=temp)
         json_payload = extract_json(last_output)
+
+        # Fallback: if the LLM returned markdown instead of JSON, parse it.
+        if not json_payload and last_output and last_output.strip().startswith('#'):
+            try:
+                json_payload = _parse_markdown_resume(last_output)
+                log_msg = f"[+] Markdown resume parsed into JSON schema ({len(json_payload.get('experience', []))} jobs)."
+                print(f"\033[92m{log_msg}\033[0m")
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n{log_msg}\n\n")
+            except Exception as e:
+                print(f"\033[93m[!] Markdown parse fallback failed: {e}\033[0m")
 
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"=== {label} ===\n{last_output}\n\n")
