@@ -44,46 +44,48 @@ Produce the **final resume** that:
 
 ## Output Format
 
-Return **ONLY** the final resume in this exact Markdown structure:
+Return **ONLY** a valid JSON object with this exact schema. No markdown, no code fences, no commentary.
 
-```markdown
-# {{FULL_NAME}}
-{{LOCATION}} | {{PHONE}} | {{EMAIL}} | {{LINKEDIN}} | {{GITHUB}}
-
-## Professional Summary
-{{2-3 sentences. MUST include TOP 5 MUST-HAVES naturally. Lead with years of experience + primary specialty.}}
-
-## Core Competencies
-{{Technical skills grouped by category. REQUIRED keywords FIRST in each category.}}
-
-**Languages & Frameworks:** {{comma-separated, REQUIRED first}}
-**Cloud & Infrastructure:** {{comma-separated, REQUIRED first}}
-**Databases & Data:** {{comma-separated, REQUIRED first}}
-**Tools & Practices:** {{comma-separated, REQUIRED first}}
-
-## Professional Experience
-
-### {{CURRENT_ROLE}} | {{CURRENT_COMPANY}} | {{DATES}}
-- **{{Metric-driven achievement with REQUIRED keyword}}** — {{context, scale, impact}}
-- **{{Metric-driven achievement with HIGH PRIORITY keyword}}** — {{context, scale, impact}}
-- **{{Metric-driven achievement}}** — {{context, scale, impact}}
-
-### {{PREVIOUS_ROLE}} | {{PREVIOUS_COMPANY}} | {{DATES}}
-- **{{Metric-driven achievement with REQUIRED keyword}}** — {{context, scale, impact}}
-- **{{Metric-driven achievement}}** — {{context, scale, impact}}
-
-### {{EARLIER_ROLE}} | {{EARLIER_COMPANY}} | {{DATES}}
-- **{{Metric-driven achievement}}** — {{context, scale, impact}}
-
-## Education
-{{DEGREE}} | {{INSTITUTION}} | {{YEAR}}
-
-## Certifications
-{{CERTIFICATIONS (if any)}}
-
-## Projects (Optional)
-{{PROJECT_NAME}} | {{TECH_STACK}}
-- {{Brief description with relevant keywords}}
+```json
+{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "linkedin": "",
+  "github": "",
+  "contact_info": "",
+  "summary": "",
+  "skills": ["skill 1", "skill 2"],
+  "experience": [
+    {
+      "role": "",
+      "company": "",
+      "dates": "",
+      "location": "",
+      "bullets": [
+        "Metric-driven achievement with required keyword",
+        "Another quantified achievement"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "",
+      "role": "",
+      "description": "",
+      "bullets": []
+    }
+  ],
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "location": "",
+      "date": ""
+    }
+  ],
+  "certifications": ["cert 1", "cert 2"]
+}
 ```
 
 ---

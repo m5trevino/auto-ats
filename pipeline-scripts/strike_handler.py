@@ -88,16 +88,7 @@ def extract_json(text: str) -> Optional[Dict]:
     return None
 
 
-# ── Markdown-to-JSON fallback converter ─────────────────────────────────────
-def _extract_markdown_section(text: str, header: str) -> str:
-    """Return the text under a markdown ## section."""
-    pattern = re.compile(rf"##\s*{re.escape(header)}.*?(?=\n##\s|\Z)", re.S | re.I)
-    m = pattern.search(text)
-    if not m:
-        return ""
-    return m.group(0).split("\n", 1)[1] if "\n" in m.group(0) else ""
-
-
+# ── Contact overlay from master resume ─────────────────────────────────────
 def _extract_contact_from_master(master_text: str) -> Dict:
     """Pull name, email, phone, linkedin, github from the master resume."""
     result = {"name": "", "email": "", "phone": "", "linkedin": "", "github": "", "contact_info": ""}
@@ -145,11 +136,16 @@ def _extract_contact_from_master(master_text: str) -> Dict:
                 handle = re.sub(r"([a-z])([A-Z])", r"\1 \2", handle)
                 result["name"] = handle.title()
 
-    # Try to find an explicit full name anywhere in the document
+    # Try to find an explicit full name anywhere in the document only if we still don't have one.
+    # The known email map is trusted more than regex guessing on section headers.
     if not result["name"]:
-        name_match = re.search(r"(?:^|[\s:])((?:[A-Z][a-z]+\s+)+[A-Z][a-z]+)(?:\s+(?:is|has|with|'s|\|\s))?", master_text, re.M)
+        name_match = re.search(r"(?:^|[\s:])([A-Z][a-z]+\s+[A-Z][a-z]+)(?:\s+(?:is|has|with|'s|\|\s))?(?!\s*[A-Z][a-z]+\s+is)", master_text, re.M)
         if name_match:
-            result["name"] = name_match.group(1).strip()
+            candidate = name_match.group(1).strip()
+            # Reject common section headers that look like names
+            section_headers = {"Professional Summary", "Core Competencies", "Professional Experience", "Technical Projects", "Education", "Certifications", "Job Summary", "Responsibilities", "Experience"}
+            if candidate not in section_headers:
+                result["name"] = candidate
 
     return result
 
@@ -188,6 +184,7 @@ def _clean_resume_json(data: Dict, master_text: str) -> Dict:
                 not val or "{{" in val or "FULL_NAME" in val or "[Full Name]" in val
                 or low in placeholder_names
                 or low == "name" or low.startswith("your ") or low.startswith("example")
+                or low in {"professional summary", "core competencies", "education", "experience"}
             )
         if is_placeholder:
             data[key] = contact.get(key, "")
@@ -401,7 +398,7 @@ def parse_neon_output(raw_text: str) -> Dict:
     """
     Parse NEON TERMINATOR keyword extraction output.
 
-    Extracts priority scores and [REQUIRED]/[PREFERRED] flags.
+    First tries JSON (new format), then falls back to legacy markdown bullet parsing.
     Returns dict with categories, weighted list, and top_5.
     """
     categories = {
@@ -411,8 +408,42 @@ def parse_neon_output(raw_text: str) -> Dict:
         "gatekeeper_credentials": [],
     }
     weighted: List[Dict] = []
-    current_cat: Optional[str] = None
 
+    # Try JSON first
+    parsed_json = extract_json(raw_text)
+    if isinstance(parsed_json, dict):
+        for cat in categories.keys():
+            categories[cat] = parsed_json.get(cat, []) if isinstance(parsed_json.get(cat), list) else []
+        for cat, items in categories.items():
+            for item in items:
+                if isinstance(item, dict):
+                    weighted.append({
+                        "keyword": str(item.get("keyword", item.get("skill", ""))),
+                        "priority": int(item.get("priority", 5)),
+                        "category": cat,
+                        "type": str(item.get("type", "unknown")),
+                    })
+                elif isinstance(item, str):
+                    weighted.append({"keyword": item, "priority": 5, "category": cat, "type": "unknown"})
+        # Handle new required_priorities / preferred_priorities arrays
+        for arr, t in [(parsed_json.get("required_priorities", []), "required"), (parsed_json.get("preferred_priorities", []), "preferred")]:
+            for item in arr:
+                if isinstance(item, dict):
+                    weighted.append({
+                        "keyword": str(item.get("keyword", "")),
+                        "priority": int(item.get("priority", 5)),
+                        "category": "hard_skills",
+                        "type": t,
+                    })
+        weighted.sort(key=lambda x: x["priority"], reverse=True)
+        return {
+            **categories,
+            "weighted": weighted,
+            "top_5": [w["keyword"] for w in weighted[:5]],
+        }
+
+    # Legacy markdown bullet parser
+    current_cat: Optional[str] = None
     priority_pattern = re.compile(r"\[PRIORITY:\s*(\d+)\]", re.IGNORECASE)
     required_pattern = re.compile(r"\[REQUIRED\]", re.IGNORECASE)
     preferred_pattern = re.compile(r"\[PREFERRED\]", re.IGNORECASE)
@@ -420,7 +451,6 @@ def parse_neon_output(raw_text: str) -> Dict:
     for line in raw_text.split("\n"):
         line = line.strip()
 
-        # Detect category headers
         upper = line.upper()
         if "HARD SKILL" in upper or "HARD_SKILL" in upper:
             current_cat = "hard_skills"
@@ -435,14 +465,11 @@ def parse_neon_output(raw_text: str) -> Dict:
             current_cat = "gatekeeper_credentials"
             continue
 
-        # Parse bullet lines
         if line.startswith(("*", "-")):
             priority_match = priority_pattern.search(line)
             priority = int(priority_match.group(1)) if priority_match else 5
-
             is_required = bool(required_pattern.search(line))
             is_preferred = bool(preferred_pattern.search(line))
-
             keyword = line.lstrip("*-").strip()
             keyword = priority_pattern.sub("", keyword).strip()
             keyword = required_pattern.sub("", keyword).strip()
@@ -458,14 +485,11 @@ def parse_neon_output(raw_text: str) -> Dict:
                     "type": "required" if is_required else ("preferred" if is_preferred else "unknown"),
                 })
 
-    # Sort by priority descending
     weighted.sort(key=lambda x: x["priority"], reverse=True)
-    top_5 = [w["keyword"] for w in weighted[:5]]
-
     return {
         **categories,
         "weighted": weighted,
-        "top_5": top_5,
+        "top_5": [w["keyword"] for w in weighted[:5]],
     }
 
 
@@ -844,19 +868,7 @@ def execute_strike(
         last_output = call_llm(prompt, model=model, temp=temp)
         json_payload = extract_json(last_output)
 
-        # Fallback: if the LLM returned markdown instead of JSON, parse it.
-        if not json_payload and last_output and last_output.strip().startswith('#'):
-            try:
-                json_payload = _parse_markdown_resume(last_output, master_resume_text)
-                json_payload = _clean_resume_json(json_payload, master_resume_text)
-                log_msg = f"[+] Markdown resume parsed into JSON schema ({len(json_payload.get('experience', []))} jobs)."
-                print(f"\033[92m{log_msg}\033[0m")
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n{log_msg}\n\n")
-            except Exception as e:
-                print(f"\033[93m[!] Markdown parse fallback failed: {e}\033[0m")
-
-        # Always clean/overlay contact info on extracted JSON
+        # Clean/overlay contact info on extracted JSON
         if json_payload:
             json_payload = _clean_resume_json(json_payload, master_resume_text)
 

@@ -20,18 +20,37 @@ You are a senior resume writer. Update the Projects, Education, and Certificatio
 
 ## Output Format
 
-Return ONLY the updated sections. No commentary, no code fences.
+Return ONLY a valid JSON object with this exact schema. No markdown, no code fences, no commentary.
 
-```markdown
-## Education
-{{DEGREE}} | {{INSTITUTION}} | {{YEAR}}
-
-## Certifications
-{{CERTIFICATIONS (if any)}}
-
-## Projects (Optional)
-{{PROJECT_NAME}} | {{TECH_STACK}}
-- {{Brief description with relevant keywords}}
+```json
+{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "linkedin": "",
+  "github": "",
+  "contact_info": "",
+  "summary": "",
+  "skills": [],
+  "experience": [],
+  "projects": [
+    {
+      "name": "",
+      "role": "",
+      "description": "",
+      "bullets": []
+    }
+  ],
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "location": "",
+      "date": ""
+    }
+  ],
+  "certifications": ["cert 1", "cert 2"]
+}
 ```
 
 ---

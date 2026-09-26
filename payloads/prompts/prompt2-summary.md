@@ -20,11 +20,23 @@ You are a senior resume writer. Rewrite the Professional Summary section of the 
 
 ## Output Format
 
-Return ONLY the updated Professional Summary as a single markdown block. No commentary, no code fences.
+Return ONLY a valid JSON object with this exact schema. No markdown, no code fences, no commentary.
 
-```markdown
-## Professional Summary
-{{2-3 sentences. Lead with years of experience + primary specialty.}}
+```json
+{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "linkedin": "",
+  "github": "",
+  "contact_info": "",
+  "summary": "2-3 sentences. Lead with years of experience + primary specialty.",
+  "skills": [],
+  "experience": [],
+  "projects": [],
+  "education": [],
+  "certifications": []
+}
 ```
 
 ---

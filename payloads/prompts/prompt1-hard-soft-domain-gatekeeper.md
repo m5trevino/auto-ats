@@ -26,10 +26,18 @@ Produce a structured keyword reconnaissance report. Identify every skill, qualif
 
 ## Output Format
 
-Return ONLY the following structured report. No prose, no commentary, no code fences.
+Return ONLY a valid JSON object. No markdown, no prose, no commentary, no code fences. Do not wrap the output in ```json ... ```. Raw JSON only.
 
-```markdown
-## HARD SKILLS
+```json
+{
+  "hard_skills": ["skill 1", "skill 2"],
+  "soft_skills": ["skill 1", "skill 2"],
+  "domain_keywords": ["keyword 1", "keyword 2"],
+  "gatekeeper_credentials": ["credential 1", "credential 2"],
+  "required_priorities": [{"keyword": "...", "priority": 10}, ...],
+  "preferred_priorities": [{"keyword": "...", "priority": 5}, ...]
+}
+```
 * Python [PRIORITY: 10] [REQUIRED] - mentioned 5 times in core requirements
 * AWS [PRIORITY: 8] [REQUIRED] - mentioned 3 times
 * Kubernetes [PRIORITY: 5] [PREFERRED] - mentioned once as "nice to have"

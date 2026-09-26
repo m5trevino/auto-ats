@@ -20,15 +20,23 @@ You are a senior resume writer. Rewrite the Core Competencies / Skills section o
 
 ## Output Format
 
-Return ONLY the updated Core Competencies section. No commentary, no code fences.
+Return ONLY a valid JSON object with this exact schema. No markdown, no code fences, no commentary.
 
-```markdown
-## Core Competencies
-
-**Languages & Frameworks:** {{comma-separated, REQUIRED first}}
-**Cloud & Infrastructure:** {{comma-separated, REQUIRED first}}
-**Databases & Data:** {{comma-separated, REQUIRED first}}
-**Tools & Practices:** {{comma-separated, REQUIRED first}}
+```json
+{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "linkedin": "",
+  "github": "",
+  "contact_info": "",
+  "summary": "",
+  "skills": ["skill 1", "skill 2", "REQUIRED skill first"],
+  "experience": [],
+  "projects": [],
+  "education": [],
+  "certifications": []
+}
 ```
 
 ---

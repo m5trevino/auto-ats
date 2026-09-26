@@ -10,7 +10,7 @@ Open-source, self-hosted resume tailoring system. Clone it, drop in your master 
 - Generates a PDF automatically.
 - Supports manual entry, bulk JSON import, file upload, and browser userscripts (e.g. Indeed).
 
-## Quick start
+## Quick start (database-driven orchestrator)
 
 ```bash
 git clone <repo-url> auto-ats
@@ -20,15 +20,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Edit .env with your LLM provider URL and API key, OR set it in the web UI.
+# Edit .env with your LLM provider URL and API key, OR create provider_config.json.
 
 cp /path/to/your/resume.txt master.txt
-# OR upload/paste your resume in the web UI after starting the app.
 
-python3 server.py
+python3 orchestrator.py init-db --db resume.db
+python3 orchestrator.py seed --db resume.db --agents-dir agents
+python3 orchestrator.py ingest-master --db resume.db --master-file master.txt
+
+# Add a job and run the strike team
+python3 orchestrator.py add-job --db resume.db --resume-id 1 --jd-file jd.txt
+python3 orchestrator.py run-approved --db resume.db
+
+# Check results
+python3 orchestrator.py status --db resume.db
 ```
 
-Open `http://localhost:5000`. The UI looks like a job-search site.
+The web UI is also available via `python3 server.py` for browsing jobs and approving them visually.
 
 ## LLM Provider Setup
 
@@ -101,6 +109,17 @@ You can store multiple resumes in `resumes/` and switch between them per job.
 
 ## Workflow
 
+### Database orchestrator
+
+1. Seed agents: `python3 orchestrator.py seed --agents-dir agents`
+2. Ingest your master resume: `python3 orchestrator.py ingest-master --master-file master.txt`
+3. Add jobs via `add-job` or the web UI (status becomes `APPROVED`).
+4. Run approved jobs: `python3 orchestrator.py run-approved`
+5. Each strike is one row in `agent_runs`. Inspect with `status` or query the DB directly.
+6. The final resume JSON is in the TB-105 `output_json` column.
+
+### Web UI workflow
+
 1. Jobs arrive in **Job Feed** (status `NEW`).
 2. Click a job and **Approve** the ones you want to pursue.
 3. Switch to **Generation**, select the job, choose your resume + model, and click **Create Tailored**.
@@ -118,12 +137,30 @@ ATS_GATE_THRESHOLD=35.0
 ATS_GATE_MIN_SIGNAL=5.0
 ```
 
+Or create `provider_config.json`:
+
+```json
+{
+  "url": "http://localhost:3001/v1",
+  "api_key": "your-key",
+  "model": "auto"
+}
+```
+
 ## Project layout
 
 ```
 auto-ats/
-├── server.py                 # Flask API
-├── pipeline-scripts/         # Scorer, strike orchestrator, import engine
+├── orchestrator.py           # SQLModel strike-team runner (new)
+├── server.py                 # Flask API / camouflage UI
+├── agents/                   # tb-*.json strike team agent specs
+│   ├── tb-101.json
+│   ├── tb-102.json
+│   ├── tb-103.json
+│   ├── tb-104.json
+│   └── tb-105.json
+├── resume-strike-team.json   # Pipeline manifest for the strike team
+├── pipeline-scripts/         # Scorer, legacy strike orchestrator, import engine
 │   ├── ats_scorer.py
 │   ├── strike_handler.py
 │   └── job_import.py
@@ -133,7 +170,8 @@ auto-ats/
 │   └── style.css
 ├── payloads/prompts/         # 6-strike prompts
 ├── targets/                  # Generated resumes + PDFs (gitignored)
-├── jobs.db                   # SQLite metadata (gitignored)
+├── resume.db                 # New SQLModel orchestrator DB (gitignored)
+├── jobs.db                   # Legacy SQLite metadata (gitignored)
 ├── master.txt                # Your master resume (gitignored, template provided)
 └── resumes/                  # Optional additional resumes (gitignored)
 ```
