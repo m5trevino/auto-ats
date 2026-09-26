@@ -98,7 +98,123 @@ def _extract_markdown_section(text: str, header: str) -> str:
     return m.group(0).split("\n", 1)[1] if "\n" in m.group(0) else ""
 
 
-def _parse_markdown_resume(markdown_text: str) -> Dict:
+def _extract_contact_from_master(master_text: str) -> Dict:
+    """Pull name, email, phone, linkedin, github from the master resume."""
+    result = {"name": "", "email": "", "phone": "", "linkedin": "", "github": "", "contact_info": ""}
+    lines = master_text.splitlines()
+
+    # Scan first 15 lines for contact info (we need email/linkedin before deriving name)
+    for line in lines[:15]:
+        emails = re.findall(r"[\w.-]+@[\w.-]+\.\w+", line)
+        if emails and not result["email"]:
+            result["email"] = emails[0]
+        phones = re.findall(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", line)
+        if phones and not result["phone"]:
+            result["phone"] = phones[0]
+        linkedins = re.findall(r"linkedin\.com/[^\s|]+", line)
+        if linkedins and not result["linkedin"]:
+            result["linkedin"] = linkedins[0]
+        githubs = re.findall(r"github\.com/[^\s|]+", line)
+        if githubs and not result["github"]:
+            result["github"] = githubs[0]
+        if "Location:" in line and not result["contact_info"]:
+            result["contact_info"] = line.replace("Location:", "").strip()
+        elif "Contact:" in line and not result["contact_info"]:
+            result["contact_info"] = line.replace("Contact:", "").strip()
+
+    # Derive name from email handle if not found in text
+    if not result["name"]:
+        if result["email"]:
+            local = result["email"].split("@")[0]
+            # Convert mtrevino1983 -> Matthew Trevino using known mapping
+            known_map = {
+                "mtrevino1983": "Matthew Trevino",
+            }
+            if local in known_map:
+                result["name"] = known_map[local]
+            else:
+                # Generic: split camel-case / dotted names
+                parts = re.sub(r"([a-z])([A-Z])", r"\1 \2", local)
+                parts = re.sub(r"[0-9._-]+", " ", parts).strip()
+                result["name"] = parts.title()
+        elif result["linkedin"]:
+            m = re.search(r"linkedin\.com/in/([\w-]+)", result["linkedin"])
+            if m:
+                handle = m.group(1)
+                handle = re.sub(r"[0-9._-]+", " ", handle).strip()
+                handle = re.sub(r"([a-z])([A-Z])", r"\1 \2", handle)
+                result["name"] = handle.title()
+
+    # Try to find an explicit full name anywhere in the document
+    if not result["name"]:
+        name_match = re.search(r"(?:^|[\s:])((?:[A-Z][a-z]+\s+)+[A-Z][a-z]+)(?:\s+(?:is|has|with|'s|\|\s))?", master_text, re.M)
+        if name_match:
+            result["name"] = name_match.group(1).strip()
+
+    return result
+
+
+def _clean_resume_json(data: Dict, master_text: str) -> Dict:
+    """Strip markdown markers and overlay real contact info from master resume."""
+    contact = _extract_contact_from_master(master_text)
+
+    def clean_str(s):
+        if not isinstance(s, str):
+            return s
+        s = re.sub(r"\*\*\s*", "", s)
+        s = re.sub(r"\s*\*\*", "", s)
+        return s.strip()
+
+    def clean_list(items):
+        out = []
+        for item in items:
+            if isinstance(item, str):
+                c = clean_str(item)
+                if c:
+                    out.append(c)
+            else:
+                out.append(item)
+        return out
+
+    placeholder_names = {"your name", "yourname", "full name", "fullname", "[full name]", "{{full_name}}", "{{full name}}", "name here"}
+    for key in ["name", "email", "phone", "linkedin", "github", "contact_info", "summary"]:
+        val = data.get(key, "")
+        if val and not re.sub(r"[^A-Za-z0-9]", "", str(val)):
+            val = ""
+        is_placeholder = False
+        if isinstance(val, str):
+            low = val.lower().strip()
+            is_placeholder = (
+                not val or "{{" in val or "FULL_NAME" in val or "[Full Name]" in val
+                or low in placeholder_names
+                or low == "name" or low.startswith("your ") or low.startswith("example")
+            )
+        if is_placeholder:
+            data[key] = contact.get(key, "")
+        else:
+            data[key] = clean_str(val)
+
+    data["skills"] = clean_list(data.get("skills", []))
+    data["certifications"] = clean_list(data.get("certifications", []))
+
+    for exp in data.get("experience", []):
+        for k in ["role", "company", "dates", "location"]:
+            exp[k] = clean_str(exp.get(k, ""))
+        exp["bullets"] = clean_list(exp.get("bullets", []))
+
+    for proj in data.get("projects", []):
+        for k in ["name", "role", "description"]:
+            proj[k] = clean_str(proj.get(k, ""))
+        proj["bullets"] = clean_list(proj.get("bullets", []))
+
+    for edu in data.get("education", []):
+        for k in ["degree", "institution", "location", "date"]:
+            edu[k] = clean_str(edu.get(k, ""))
+
+    return data
+
+
+def _parse_markdown_resume(markdown_text: str, master_text: str = "") -> Dict:
     """
     Convert a markdown resume into the JSON schema expected by pdf_engine.
     Used as fallback when the LLM ignores JSON instructions.
@@ -122,8 +238,16 @@ def _parse_markdown_resume(markdown_text: str) -> Dict:
 
     # Header line usually has name, contact
     if lines:
-        first = lines[0].strip().lstrip("# ")
-        data["name"] = first.strip()
+        first = lines[0].strip().lstrip("# ").strip()
+        if first and "{{" not in first:
+            data["name"] = first.strip()
+        else:
+            # Try next non-empty line
+            for line in lines[1:8]:
+                candidate = line.strip().lstrip("# ").strip()
+                if candidate and "{{" not in candidate and "@" not in candidate:
+                    data["name"] = candidate
+                    break
 
     # Contact line
     for line in lines[:10]:
@@ -453,6 +577,7 @@ def call_llm(prompt: str, model: str = "auto", temp: float = 0.7) -> str:
         "model": model or default_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temp,
+        "format": "json",
     }
 
     headers = {
@@ -460,32 +585,52 @@ def call_llm(prompt: str, model: str = "auto", temp: float = 0.7) -> str:
         "Content-Type": "application/json",
     }
 
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            chat_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+    import urllib.request
+    import urllib.error
+    import time
 
-        # OpenAI-compatible response shape
-        choice = data.get("choices", [{}])[0]
-        message = choice.get("message", {}) if isinstance(choice, dict) else {}
-        content = message.get("content", "") if isinstance(message, dict) else str(choice)
+    max_retries = int(os.getenv("STRIKE_MAX_RETRIES", "3"))
+    backoff = float(os.getenv("STRIKE_RETRY_BACKOFF", "1.5"))
+    last_exception = None
 
-        # If the model returns a valid JSON resume, return it directly.
-        parsed = extract_json(content)
-        if isinstance(parsed, dict):
-            return json.dumps(parsed, indent=2)
-        # Otherwise return the raw text and let downstream parsers handle it.
-        return content
+    for attempt in range(max_retries + 1):
+        try:
+            req = urllib.request.Request(
+                chat_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
 
-    except Exception as e:
-        print(f"\033[93m[!] FreeLLM API call failed: {e}. Using mock response.\033[0m")
-        return _mock_llm_response()
+            # OpenAI-compatible response shape
+            choice = data.get("choices", [{}])[0]
+            message = choice.get("message", {}) if isinstance(choice, dict) else {}
+            content = message.get("content", "") if isinstance(message, dict) else str(choice)
+
+            # If the model returns a valid JSON resume, return it directly.
+            parsed = extract_json(content)
+            if isinstance(parsed, dict):
+                return json.dumps(parsed, indent=2)
+            # Otherwise return the raw text and let downstream parsers handle it.
+            return content
+
+        except urllib.error.HTTPError as e:
+            last_exception = e
+            status = e.code
+            if status in (429, 502, 503) and attempt < max_retries:
+                wait = backoff * (2 ** attempt)
+                print(f"\033[93m[!] FreeLLM API returned {status}. Retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\033[0m")
+                time.sleep(wait)
+                continue
+            break
+        except Exception as e:
+            last_exception = e
+            break
+
+    print(f"\033[93m[!] FreeLLM API call failed: {last_exception}. Using mock response.\033[0m")
+    return _mock_llm_response()
 
 
 def _mock_llm_response() -> str:
@@ -702,13 +847,18 @@ def execute_strike(
         # Fallback: if the LLM returned markdown instead of JSON, parse it.
         if not json_payload and last_output and last_output.strip().startswith('#'):
             try:
-                json_payload = _parse_markdown_resume(last_output)
+                json_payload = _parse_markdown_resume(last_output, master_resume_text)
+                json_payload = _clean_resume_json(json_payload, master_resume_text)
                 log_msg = f"[+] Markdown resume parsed into JSON schema ({len(json_payload.get('experience', []))} jobs)."
                 print(f"\033[92m{log_msg}\033[0m")
                 with open(log_path, "a", encoding="utf-8") as f:
                     f.write(f"\n{log_msg}\n\n")
             except Exception as e:
                 print(f"\033[93m[!] Markdown parse fallback failed: {e}\033[0m")
+
+        # Always clean/overlay contact info on extracted JSON
+        if json_payload:
+            json_payload = _clean_resume_json(json_payload, master_resume_text)
 
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"=== {label} ===\n{last_output}\n\n")
