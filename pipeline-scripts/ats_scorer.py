@@ -1,22 +1,26 @@
 """
-ATS Scorer — Score resumes against job descriptions using weighted keyword matching.
+ATS Scorer — Score resumes against job descriptions using JD-derived keywords.
 
-SCORE ARTIFACT SCHEMA CONTRACT (for OpenTUI/consumers):
-=======================================================
+Reads the keyword reconnaissance produced by the TB-101 NEON_TERMINATOR agent so the
+score is based on what the job description actually asks for, not a hardcoded
+lexicon.
+
+SCORE ARTIFACT SCHEMA CONTRACT:
+================================
 
 Location: targets/<job_id>/
 Files:
-  - baseline_score.json: ExperienceDB vs JD score (pre-strike)
-  - final_score.json: Generated resume vs JD score (post-strike)
+  - baseline_score.json: master resume vs JD score (pre-strike)
+  - final_score.json: generated resume vs JD score (post-strike)
 
 Schema (both files):
 {
   "score": float,              # 0-100 ATS match score
   "baseline_score": float|null, # Only in final_score.json (ref to baseline)
-  "improvement": float|null,    # Only in final_score.json (final - baseline)
+  "improvement": float|null,    # final - baseline
   "matched_keywords": [str],    # Keywords found in resume
   "missing_keywords": [str],    # Keywords NOT found in resume
-  "missing_critical": [str],    # Required hard skills missing
+  "missing_critical": [str],    # Required keywords missing
   "match_ratio": float,         # matched / total keywords
   "raw_points": float,          # Weighted points earned
   "max_points": float           # Maximum possible points
@@ -26,231 +30,29 @@ Schema (both files):
 import json
 import os
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 
-# ── Weights ───────────────────────────────────────────────────────────────
-HARD_WEIGHT = 3.0
-SOFT_WEIGHT = 1.0
-PREFERRED_WEIGHT = 0.6
-
-
-# ── Skill Lexicon ──────────────────────────────────────────────────────────
-HARD_SKILLS = {
-    # Core Languages / Frameworks
-    "python": 10,
-    "javascript": 10,
-    "typescript": 9,
-    "react": 9,
-    "node.js": 9,
-    "sql": 9,
-    "django": 8,
-    "flask": 8,
-    "fastapi": 8,
-    "postgresql": 8,
-    "mysql": 7,
-    "mongodb": 7,
-    "redis": 7,
-    "html": 7,
-    "css": 7,
-    "sass": 6,
-    "jquery": 6,
-    # Cloud / DevOps / Infrastructure
-    "aws": 9,
-    "azure": 8,
-    "gcp": 8,
-    "docker": 8,
-    "kubernetes": 8,
-    "aws lambda": 7,
-    "terraform": 7,
-    "ansible": 7,
-    "jenkins": 7,
-    "github actions": 7,
-    "cicd": 7,
-    "ci/cd": 7,
-    "nginx": 6,
-    "apache": 6,
-    "linux": 7,
-    "ubuntu": 6,
-    # AI / ML / Data
-    "machine learning": 8,
-    "langchain": 8,
-    "llamaindex": 8,
-    "openai": 8,
-    "anthropic": 8,
-    "huggingface": 7,
-    "transformers": 7,
-    "pytorch": 7,
-    "tensorflow": 7,
-    "vector database": 7,
-    "embedding": 7,
-    "rag": 7,
-    "mcp": 6,
-    "pandas": 7,
-    "numpy": 7,
-    "data analysis": 7,
-    "etl": 7,
-    # Modern Frontend / Backend
-    "next.js": 8,
-    "svelte": 7,
-    "tailwind": 7,
-    "vite": 6,
-    "pydantic": 7,
-    "prisma": 7,
-    "supabase": 7,
-    # Platform / Observability
-    "argocd": 6,
-    "pulumi": 6,
-    "backstage": 6,
-    "gitops": 6,
-    "datadog": 6,
-    "grafana": 6,
-    "opentelemetry": 6,
-    # General
-    "git": 8,
-    "rest api": 8,
-    "graphql": 8,
-    "microservices": 8,
-    "oauth": 6,
-    "jwt": 6,
-}
-
-SOFT_SKILLS = {
-    "communication": 5,
-    "leadership": 5,
-    "teamwork": 5,
-    "problem solving": 5,
-    "critical thinking": 5,
-    "time management": 4,
-    "adaptability": 4,
-    "collaboration": 4,
-    "mentoring": 4,
-    "project management": 4,
-}
-
-PREFERRED_SKILLS = {
-    "aws lambda": 7,
-    "cicd": 7,
-    "ci/cd": 7,
-    "kubernetes": 6,
-    "docker": 6,
-    "typescript": 5,
-    "graphql": 5,
-    "redis": 5,
-    "kafka": 5,
-    "rabbitmq": 5,
-}
-
-
-# ── Synonym Mappings ───────────────────────────────────────────────────────
-SKILL_SYNONYMS: Dict[str, List[str]] = {
-    "python": ["python", "py", "python3", "python scripting"],
-    "javascript": ["javascript", "js", "ecmascript", "node.js", "nodejs", "node"],
-    "typescript": ["typescript", "ts"],
-    "react": ["react", "reactjs", "react.js"],
-    "node.js": ["node.js", "nodejs", "node"],
-    "sql": ["sql", "postgresql", "mysql", "mssql", "sqlite"],
-    "docker": ["docker", "docker container"],
-    "kubernetes": ["kubernetes", "k8s"],
-    "aws": ["aws", "amazon web services", "amazonaws"],
-    "git": ["git"],
-    "machine learning": ["machine learning", "ml", "ai"],
-    "next.js": ["next.js", "nextjs"],
-    "svelte": ["svelte"],
-    "tailwind": ["tailwind", "tailwindcss"],
-    "pydantic": ["pydantic"],
-    "prisma": ["prisma"],
-    "supabase": ["supabase"],
-    "argocd": ["argocd", "argo cd"],
-    "pulumi": ["pulumi"],
-    "backstage": ["backstage"],
-    "gitops": ["gitops"],
-    "datadog": ["datadog"],
-    "grafana": ["grafana"],
-    "opentelemetry": ["opentelemetry", "otel"],
-    "langchain": ["langchain"],
-    "llamaindex": ["llamaindex"],
-    "openai": ["openai", "gpt", "chatgpt"],
-    "anthropic": ["anthropic", "claude"],
-    "huggingface": ["huggingface", "transformers"],
-    "vector database": ["vector database", "vectordb", "pinecone", "weaviate", "chroma"],
-    "embedding": ["embedding", "embeddings", "vector search"],
-    "rag": ["rag", "retrieval augmented generation"],
-    "mcp": ["mcp"],
-    "communication": ["communication", "communicate", "verbal", "written"],
-    "leadership": ["leadership", "lead", "manager", "management"],
-    "teamwork": ["teamwork", "team", "collaborate", "collaboration"],
-    "problem solving": ["problem solving", "problem-solve", "analytical"],
-    "time management": ["time management", "deadline"],
-    "cicd": ["cicd", "ci/cd", "continuous integration", "continuous deployment"],
-    "ci/cd": ["cicd", "ci/cd", "continuous integration", "continuous deployment"],
-    "aws lambda": ["aws lambda", "lambda"],
-    "rest api": ["rest api", "restful api", "rest"],
-    "graphql": ["graphql"],
-}
-
-
-# ── ATSScorer ────────────────────────────────────────────────────────────
 class ATSScorer:
-    """Scores resume text against job descriptions using weighted keyword matching."""
+    """Scores resume text against job descriptions using TB-101 keyword recon."""
 
-    def __init__(self):
-        self.hard_skills = HARD_SKILLS
-        self.soft_skills = SOFT_SKILLS
-        self.preferred_skills = PREFERRED_SKILLS
-        self.synonyms = SKILL_SYNONYMS
+    DEFAULT_REQUIRED_WEIGHT = 3.0
+    DEFAULT_PREFERRED_WEIGHT = 1.0
+
+    def __init__(self, recon: Optional[Dict] = None):
+        """Initialize scorer. Optional recon is the TB-101 output dict."""
+        self.recon = recon or {}
 
     # ── Normalization ──────────────────────────────────────────────────────
-    def _normalize(self, text: str) -> str:
+    @staticmethod
+    def _normalize(text: str) -> str:
         """Lowercase, strip punctuation, collapse whitespace."""
+        if not text:
+            return ""
         text = text.lower()
         text = re.sub(r"[^a-z0-9\s/\-]", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text
-
-    def _keyword_in_corpus(self, keyword: str, corpus: Dict[str, Set[str]]) -> bool:
-        """Check if a keyword (or any of its synonyms) appears in the corpus."""
-        normalized_kw = self._normalize(keyword)
-        variants = self.synonyms.get(normalized_kw, [normalized_kw])
-        tokens = corpus.get("tokens", set())
-        raw_text = corpus.get("raw_text", "")
-
-        for variant in variants:
-            nv = self._normalize(variant)
-            if not nv:
-                continue
-            # Exact token match
-            if nv in tokens:
-                return True
-            # Substring match against raw text (catches variants not tokenized)
-            if f" {nv} " in f" {raw_text} ":
-                return True
-            # Word-boundary regex for multi-word skills
-            if re.search(r"\b" + re.escape(nv) + r"\b", raw_text):
-                return True
-        return False
-
-    def _extract_skills_from_text(self, text: str) -> Dict[str, List[Dict]]:
-        """Extract hard/soft/preferred skills from text, returning weighted list."""
-        corpus = self._build_corpus_from_text(text)
-        weighted: List[Dict] = []
-
-        for category, skill_dict, weight in [
-            ("hard", self.hard_skills, HARD_WEIGHT),
-            ("soft", self.soft_skills, SOFT_WEIGHT),
-            ("preferred", self.preferred_skills, PREFERRED_WEIGHT),
-        ]:
-            for canonical, priority in skill_dict.items():
-                if self._keyword_in_corpus(canonical, corpus):
-                    weighted.append({
-                        "keyword": canonical,
-                        "priority": priority,
-                        "category": category,
-                        "weight": weight,
-                    })
-
-        weighted.sort(key=lambda x: (-x["priority"], x["keyword"]))
-        return {"weighted": weighted}
 
     def _build_corpus_from_text(self, text: str) -> Dict[str, Set[str]]:
         """Build search corpus from resume/job description text."""
@@ -268,52 +70,80 @@ class ATSScorer:
             "raw_text": text.lower(),
         }
 
-    def _compute_weighted_score(
-        self,
-        required: Set[str],
-        preferred: Set[str],
-        matched: Set[str],
-    ) -> Tuple[float, float]:
-        """Compute weighted raw_points and max_points."""
-        raw_points = 0.0
-        max_points = 0.0
+    def _keyword_present(self, keyword: str, corpus: Dict[str, Set[str]]) -> bool:
+        """Check if a keyword (or close variant) appears in the corpus."""
+        nv = self._normalize(keyword)
+        if not nv:
+            return False
+        tokens = corpus.get("tokens", set())
+        raw_text = corpus.get("raw_text", "")
 
-        for kw in required:
-            weight = self.hard_skills.get(kw, 0) * HARD_WEIGHT
-            if not weight:
-                weight = self.soft_skills.get(kw, 0) * SOFT_WEIGHT
-            if not weight:
-                weight = 5 * HARD_WEIGHT
-            max_points += weight
-            if kw in matched:
-                raw_points += weight
+        # Exact token / bigram / trigram match
+        if nv in tokens:
+            return True
+        # Substring surrounded by spaces
+        if f" {nv} " in f" {raw_text} ":
+            return True
+        # Word boundary regex
+        if re.search(r"\b" + re.escape(nv) + r"\b", raw_text):
+            return True
 
-        for kw in preferred:
-            weight = self.preferred_skills.get(kw, 0) * PREFERRED_WEIGHT
-            if not weight:
-                weight = self.hard_skills.get(kw, 0) * PREFERRED_WEIGHT
-            if not weight:
-                weight = 3 * PREFERRED_WEIGHT
-            max_points += weight
-            if kw in matched:
-                raw_points += weight
+        # Stem heuristic: if keyword has 6+ chars, allow prefix stem match
+        # e.g. "delivery schedules" → "delivery schedule" or "delivery scheduling"
+        if len(nv) >= 6:
+            stem = nv[:max(4, len(nv) - 3)]
+            if re.search(r"\b" + re.escape(stem) + r"[a-z]*\b", raw_text):
+                return True
+        return False
 
-        return raw_points, max_points
+    def _extract_recon_keywords(self) -> List[Dict]:
+        """Build a unified weighted keyword list from TB-101 recon data."""
+        keywords: List[Dict] = []
 
-    def _extract_jd_keywords(self, jd_text: str) -> Dict[str, List[str]]:
-        """Extract required and preferred keywords from a job description."""
-        extracted = self._extract_skills_from_text(jd_text)
-        weighted = extracted.get("weighted", [])
+        for item in self.recon.get("required_priorities", []):
+            kw = item.get("keyword", "") if isinstance(item, dict) else str(item)
+            priority = item.get("priority", 8) if isinstance(item, dict) else 8
+            keywords.append({
+                "keyword": kw,
+                "priority": priority,
+                "type": "required",
+                "weight": self.DEFAULT_REQUIRED_WEIGHT,
+            })
 
-        required = [
-            w["keyword"] for w in weighted
-            if w.get("priority", 5) >= 7
-        ]
-        preferred = [
-            w["keyword"] for w in weighted
-            if 4 <= w.get("priority", 5) < 7
-        ]
-        return {"required": required, "preferred": preferred}
+        for item in self.recon.get("preferred_priorities", []):
+            kw = item.get("keyword", "") if isinstance(item, dict) else str(item)
+            priority = item.get("priority", 4) if isinstance(item, dict) else 4
+            keywords.append({
+                "keyword": kw,
+                "priority": priority,
+                "type": "preferred",
+                "weight": self.DEFAULT_PREFERRED_WEIGHT,
+            })
+
+        # Add any hard_skills / soft_skills / domain_keywords not already covered
+        seen = {self._normalize(k["keyword"]) for k in keywords}
+        for category, ktype, weight in [
+            ("hard_skills", "required", self.DEFAULT_REQUIRED_WEIGHT),
+            ("domain_keywords", "required", self.DEFAULT_REQUIRED_WEIGHT),
+            ("soft_skills", "preferred", self.DEFAULT_PREFERRED_WEIGHT),
+        ]:
+            for kw in self.recon.get(category, []):
+                if isinstance(kw, dict):
+                    kw = kw.get("keyword", "")
+                kw = str(kw).strip()
+                if not kw or self._normalize(kw) in seen:
+                    continue
+                keywords.append({
+                    "keyword": kw,
+                    "priority": 7 if ktype == "required" else 4,
+                    "type": ktype,
+                    "weight": weight,
+                })
+                seen.add(self._normalize(kw))
+
+        # Sort by priority desc
+        keywords.sort(key=lambda x: -x["priority"])
+        return keywords
 
     def _empty_result(self) -> Dict:
         return {
@@ -324,10 +154,9 @@ class ATSScorer:
             "missing_critical": [],
             "required_keywords": [],
             "preferred_keywords": [],
-            "hard_matched": [],
-            "soft_matched": [],
             "raw_points": 0.0,
             "max_points": 0.0,
+            "source": "recon",
         }
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -337,74 +166,72 @@ class ATSScorer:
         job_desc: str,
         target_dir: Optional[str] = None,
     ) -> Dict:
-        """
-        Score flattened resume text against job description text.
-
-        Similar to score_resume_vs_jd but takes text instead of ExperienceDB.
-
-        Args:
-            resume_text: Flattened resume content (from flatten_resume_to_text).
-            job_desc: Raw job description text.
-            target_dir: Optional directory to write final_score.json.
-
-        Returns:
-            Dict with score, match_ratio, matched/missing keywords, etc.
-        """
+        """Score resume text against the JD using the loaded recon data."""
         if not job_desc or not job_desc.strip():
             return self._empty_result()
         if not resume_text or not resume_text.strip():
             return self._empty_result()
 
-        jd_analysis = self._extract_jd_keywords(job_desc)
+        keywords = self._extract_recon_keywords()
+        if not keywords:
+            # Fallback: if no recon provided, score against raw JD tokens with equal weight
+            keywords = [
+                {"keyword": kw, "priority": 5, "type": "required", "weight": self.DEFAULT_REQUIRED_WEIGHT}
+                for kw in self._build_corpus_from_text(job_desc)["tokens"]
+                if len(kw) > 2
+            ]
+
         resume_corpus = self._build_corpus_from_text(resume_text)
 
-        required = set(jd_analysis["required"])
-        preferred = set(jd_analysis["preferred"])
-        all_jd_keywords = required | preferred
-
         matched: Set[str] = set()
-        hard_matched: Set[str] = set()
-        soft_matched: Set[str] = set()
+        missing: Set[str] = set()
+        raw_points = 0.0
+        max_points = 0.0
 
-        for kw in required:
-            if self._keyword_in_corpus(kw, resume_corpus):
+        required_keywords: List[str] = []
+        preferred_keywords: List[str] = []
+
+        for kw_entry in keywords:
+            kw = kw_entry["keyword"]
+            weight = kw_entry["weight"]
+            priority = kw_entry["priority"]
+            ktype = kw_entry["type"]
+
+            if ktype == "required":
+                required_keywords.append(kw)
+            else:
+                preferred_keywords.append(kw)
+
+            point_value = weight * priority
+            max_points += point_value
+
+            if self._keyword_present(kw, resume_corpus):
                 matched.add(kw)
-                if kw in self.hard_skills:
-                    hard_matched.add(kw)
-                elif kw in self.soft_skills:
-                    soft_matched.add(kw)
-
-        for kw in preferred:
-            if self._keyword_in_corpus(kw, resume_corpus):
-                matched.add(kw)
-                if kw in self.hard_skills:
-                    hard_matched.add(kw)
-                elif kw in self.soft_skills:
-                    soft_matched.add(kw)
-
-        missing = sorted(all_jd_keywords - matched)
-        missing_critical = sorted((required - matched) & set(self.hard_skills.keys()))
-
-        raw_points, max_points = self._compute_weighted_score(required, preferred, matched)
+                raw_points += point_value
+            else:
+                missing.add(kw)
 
         score = 0.0
         match_ratio = 0.0
         if max_points > 0:
             score = round((raw_points / max_points) * 100, 2)
-            match_ratio = round(len(matched) / len(all_jd_keywords), 3)
+            total = len(keywords)
+            if total > 0:
+                match_ratio = round(len(matched) / total, 3)
+
+        missing_critical = sorted({kw for kw in missing if kw in required_keywords})
 
         result = {
             "score": score,
             "match_ratio": match_ratio,
             "matched_keywords": sorted(matched),
-            "missing_keywords": missing,
+            "missing_keywords": sorted(missing),
             "missing_critical": missing_critical,
-            "required_keywords": sorted(required),
-            "preferred_keywords": sorted(preferred),
-            "hard_matched": sorted(hard_matched),
-            "soft_matched": sorted(soft_matched),
+            "required_keywords": sorted(required_keywords),
+            "preferred_keywords": sorted(preferred_keywords),
             "raw_points": round(raw_points, 2),
             "max_points": round(max_points, 2),
+            "source": "recon",
         }
 
         if target_dir:
@@ -413,11 +240,8 @@ class ATSScorer:
         return result
 
     def score_resume_vs_jd(self, resume_data: Dict, job_desc: str) -> Dict:
-        """
-        Legacy ExperienceDB-based scorer.
-        Flattens resume_data to text then delegates to score_resume_text_vs_jd.
-        """
-        parts = []
+        """Flatten resume JSON to text, then score against JD."""
+        parts: List[str] = []
         if isinstance(resume_data, dict):
             for section in ["summary", "skills", "experience", "projects", "education", "certifications"]:
                 value = resume_data.get(section)
@@ -440,17 +264,7 @@ class ATSScorer:
         target_dir: str,
         baseline_score: Optional[float] = None,
     ) -> str:
-        """
-        Persist final ATS score results to target_dir/final_score.json.
-
-        Args:
-            result: Dict from score_resume_text_vs_jd with score, matched_keywords, etc.
-            target_dir: Directory to write final_score.json (usually targets/<job>/).
-            baseline_score: Optional baseline score for improvement calculation.
-
-        Returns:
-            Path to written file.
-        """
+        """Persist final ATS score results to target_dir/final_score.json."""
         os.makedirs(target_dir, exist_ok=True)
         path = os.path.join(target_dir, "final_score.json")
 
@@ -486,7 +300,19 @@ class ATSScorer:
 
 # ── CLI Smoke Test ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    scorer = ATSScorer()
+    scorer = ATSScorer({
+        "required_priorities": [
+            {"keyword": "Python", "priority": 10, "mention_count": 1},
+            {"keyword": "AWS", "priority": 9, "mention_count": 1},
+        ],
+        "preferred_priorities": [
+            {"keyword": "Docker", "priority": 4, "mention_count": 1},
+        ],
+        "hard_skills": ["Python", "AWS", "Docker"],
+        "soft_skills": ["Communication"],
+        "domain_keywords": ["SaaS"],
+        "gatekeeper_credentials": [],
+    })
     resume = """
     Senior Backend Engineer with 5 years experience.
     Tech Stack: Python, Django, PostgreSQL, Docker, Kubernetes, AWS, Git.
@@ -494,9 +320,9 @@ if __name__ == "__main__":
     """
     jd = """
     We are hiring a Senior Python Developer.
-    Required: Python, Django, PostgreSQL, AWS, Git.
-    Preferred: Docker, Kubernetes, CI/CD.
-    3+ years experience required. Leadership experience a plus.
+    Required: Python, AWS, strong communication.
+    Preferred: Docker, Kubernetes.
+    3+ years experience required.
     """
     result = scorer.score_resume_text_vs_jd(resume, jd)
     print(json.dumps(result, indent=2))

@@ -625,7 +625,8 @@ def call_llm(prompt: str, model: str = "auto", temp: float = 0.7) -> str:
                 headers=headers,
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            timeout = int(os.getenv("AI_ENGINE_TIMEOUT", "240"))
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
             # OpenAI-compatible response shape

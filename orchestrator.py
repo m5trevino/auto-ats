@@ -45,6 +45,18 @@ try:
 except ImportError:
     _HAVE_JSONSCHEMA = False
 
+# Reuse existing PDF engine and ATS scorer.
+try:
+    import pdf_engine
+    _PDF_ENGINE = pdf_engine
+except Exception as _pdf_err:  # noqa: F841
+    _PDF_ENGINE = None
+
+try:
+    import ats_scorer
+except Exception as _ats_err:  # noqa: F841
+    ats_scorer = None
+
 EXECUTION_ORDER = ["TB-101", "TB-102", "TB-103", "TB-104", "TB-105"]
 
 # ---------------------------------------------------------------------------
@@ -610,6 +622,102 @@ def get_agent(session: Session, agent_id: str) -> Agent:
     return agent
 
 
+def _target_dir(job: Job, resume: Resume) -> str:
+    """Return a stable target directory path for job artifacts."""
+    from pdf_engine import sanitize_filename
+    title = sanitize_filename(job.raw_jd_text.split("\n", 1)[0].strip())
+    if not title:
+        title = f"job_{job.id}"
+    name = sanitize_filename(resume.name) if resume else "resume"
+    path = os.path.join("targets", f"{title}_{name}_{job.id}")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _flatten_resume_to_text(resume_data: dict) -> str:
+    """Flatten a resume JSON dict into searchable text for ATS scoring."""
+    parts: List[str] = []
+    if resume_data.get("summary"):
+        parts.append(str(resume_data["summary"]))
+    skills = resume_data.get("skills", [])
+    if isinstance(skills, list):
+        parts.append(" ".join(str(s) for s in skills))
+    for exp in resume_data.get("experience", []):
+        parts.append(str(exp.get("company", "")))
+        parts.append(str(exp.get("role", "")))
+        for bullet in exp.get("bullets", []):
+            parts.append(str(bullet))
+    for proj in resume_data.get("projects", []):
+        parts.append(str(proj.get("name", "")))
+        parts.append(str(proj.get("description", "")))
+        for bullet in proj.get("bullets", []):
+            parts.append(str(bullet))
+    for edu in resume_data.get("education", []):
+        parts.append(str(edu.get("degree", "")))
+        parts.append(str(edu.get("institution", "")))
+    for cert in resume_data.get("certifications", []):
+        parts.append(str(cert))
+    return " ".join(p for p in parts if p)
+
+
+def _run_ats_scores(job: Job, resume: Resume, final_data: dict, target_dir: str, session: Session) -> None:
+    """Compute baseline and final ATS scores using TB-101 recon and save them."""
+    recon = get_last_output(session, job.id, "TB-101")
+    if not recon:
+        print("[!] no TB-101 recon available; skipping ATS scoring")
+        return
+    if ats_scorer is None:
+        print("[!] ats_scorer not available; skipping ATS scoring")
+        return
+
+    scorer = ats_scorer.ATSScorer(recon)
+
+    baseline_result = scorer.score_resume_text_vs_jd(resume.raw_text or "", job.raw_jd_text)
+    scorer.save_baseline_score(baseline_result, target_dir)
+    baseline_score = baseline_result.get("score", 0.0)
+
+    final_text = _flatten_resume_to_text(final_data)
+    final_result = scorer.score_resume_text_vs_jd(final_text, job.raw_jd_text)
+    scorer.save_final_score(final_result, target_dir, baseline_score=baseline_score)
+
+    improvement = final_result.get("score", 0.0) - baseline_score
+    print(f"[ATS] {baseline_score:.1f} → {final_result.get('score', 0.0):.1f} "
+          f"({('+' if improvement >= 0 else '')}{improvement:.1f})")
+
+
+def _generate_pdf_for_job(job: Job, final_data: dict, target_dir: str) -> Optional[str]:
+    """Generate a PDF for the final resume and return the PDF path."""
+    if _PDF_ENGINE is None:
+        print("[!] pdf_engine not available; skipping PDF generation")
+        return None
+
+    result = _PDF_ENGINE.generate_pdf(
+        job.id,
+        resume_data=final_data,
+        target_dir=target_dir,
+    )
+    if result.get("status") == "success":
+        pdf_path = result.get("path") or os.path.join(target_dir, "resume.pdf")
+        print(f"[PDF] generated {pdf_path}")
+        return pdf_path
+    print(f"[!] PDF generation failed: {result.get('message')}")
+    return None
+
+
+def _finalize_job(session: Session, job: Job, final_data: dict) -> None:
+    """Write resume.json, compute ATS scores, and generate PDF."""
+    resume = session.get(Resume, job.resume_id)
+    target_dir = _target_dir(job, resume)
+
+    json_path = os.path.join(target_dir, "resume.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(final_data, f, indent=2, ensure_ascii=False)
+    print(f"[JSON] final resume written to {json_path}")
+
+    _run_ats_scores(job, resume or Resume(), final_data, target_dir, session)
+    _generate_pdf_for_job(job, final_data, target_dir)
+
+
 def run_job(session: Session, job: Job) -> bool:
     job.status, job.error = "RUNNING", None
     session.add(job)
@@ -653,6 +761,11 @@ def run_job(session: Session, job: Job) -> bool:
         session.commit()
         warn_note = f" warnings={run.warnings}" if run.warnings else ""
         print(f"[ OK ] job {job.id} {agent_id} ({run.latency_ms}ms, {run.tokens_in}+{run.tokens_out} tok){warn_note}")
+
+    # Finalize: write resume.json, score, and generate PDF.
+    final_data = get_last_output(session, job.id, "TB-105")
+    _finalize_job(session, job, final_data)
+
     job.status = "SUCCEEDED"
     session.add(job)
     session.commit()
